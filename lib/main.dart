@@ -1,3 +1,4 @@
+import 'group_task_dialog.dart';
 import 'task_stages.dart';
 import 'task_reminders.dart';
 import 'notification_center.dart';
@@ -211,24 +212,32 @@ class _MainShellState extends State<MainShell> {
   Future<void> editGroupTask(Map<String, dynamic> task) async {
     final groupId = task['_groupId']?.toString() ?? task['groupId']?.toString();
     if (groupId == null || groupId.isEmpty) { notify('Group information is missing.'); return; }
-    final groupTaskTitleController = TextEditingController(text: task['title']?.toString() ?? '');
-    final groupTaskDescriptionController = TextEditingController(text: task['description']?.toString() ?? '');
-    DateTime? groupTaskDueDate = DateTime.tryParse(task['dueUtc']?.toString() ?? '')?.toLocal();
-    String? groupTaskAssigneeId = task['assigneeId']?.toString();
-    String groupTaskStage = taskStage(task);
-    List<Map<String, dynamic>> groupTaskEditMembers;
-    try { groupTaskEditMembers = (await api.list('groups/$groupId/members')).where((m) => m['state'] == 'accepted').toList(); } catch (e) { groupTaskTitleController.dispose(); groupTaskDescriptionController.dispose(); notify(e.toString()); return; }
-    if (!mounted) { groupTaskTitleController.dispose(); groupTaskDescriptionController.dispose(); return; }
-    final groupTaskEditResult = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, update) => AlertDialog(insetPadding: taskDialogInsets, constraints: taskDialogConstraints, title: const Text('Edit group task'), content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [TextField(controller: groupTaskTitleController, maxLength: 200, decoration: const InputDecoration(labelText: 'Task title')), TextField(controller: groupTaskDescriptionController, minLines: 5, maxLines: 5, maxLength: 4000, decoration: const InputDecoration(labelText: 'Notes')), OutlinedButton(onPressed: () async { final picked = await showDatePicker(context: ctx, initialDate: groupTaskDueDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100)); if (picked != null) update(() => groupTaskDueDate = picked); }, child: Text(groupTaskDueDate == null ? 'Set due date' : 'Due: ${groupTaskDueDate!.month}/${groupTaskDueDate!.day}/${groupTaskDueDate!.year}')), DropdownButtonFormField<String>(initialValue: groupTaskEditMembers.any((m) => m['userId']?.toString() == groupTaskAssigneeId) ? groupTaskAssigneeId : null, isExpanded: true, decoration: const InputDecoration(labelText: 'Assigned member'), items: [const DropdownMenuItem<String>(value: null, child: Text('Unassigned')), ...groupTaskEditMembers.map((m) => DropdownMenuItem<String>(value: m['userId'].toString(), child: Text(m['displayName']?.toString() ?? m['email']?.toString() ?? 'Member')))], onChanged: (v) => update(() => groupTaskAssigneeId = v)), taskStageField(groupTaskStage, (stage) => update(() => groupTaskStage = stage))])), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save'))])));
-    final editedTitle = groupTaskTitleController.text.trim();
-    final editedDescription = groupTaskDescriptionController.text.trim();
-    groupTaskTitleController.dispose();
-    groupTaskDescriptionController.dispose();
-    if (groupTaskEditResult != true) return;
-    if (editedTitle.isEmpty) { notify('Task title is required.'); return; }
-    try { await api.update('groups/$groupId/tasks', task['id'].toString(), {'title': editedTitle, 'description': editedDescription, 'dueUtc': groupTaskDueDate?.toUtc().toIso8601String(), 'assigneeId': groupTaskAssigneeId, 'taskStage': groupTaskStage, 'expectedStage': taskStage(task)}); await refresh(); } catch (e) { notify(e.toString()); }
+    List<Map<String, dynamic>> members;
+    try {
+      members = (await api.list('groups/$groupId/members'))
+          .where((member) => member['state'] == 'accepted').toList();
+    } catch (error) {
+      notify(error.toString());
+      return;
+    }
+    if (!mounted) return;
+    final changes = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) => GroupTaskDialog(
+        task: task,
+        members: members,
+        insets: taskDialogInsets,
+        constraints: taskDialogConstraints,
+      ),
+    );
+    if (!mounted || changes == null) return;
+    try {
+      await api.update('groups/$groupId/tasks', task['id'].toString(), changes);
+      await refresh();
+    } catch (error) {
+      notify(error.toString());
+    }
   }
-
   Future<void> createGroupTask() async {
     if (groups.isEmpty) { notify('Join or create a group first.'); return; }
     String? selectedGroupId = groups.first['id'].toString();
